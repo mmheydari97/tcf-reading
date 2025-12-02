@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>TCF Exam App</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* PDF / PRINT STYLING */
+        @media print {
+            .no-print { display: none !important; }
+            body, .h-full, .overflow-y-auto { 
+                height: auto !important; 
+                overflow: visible !important; 
+                background: white !important;
+            }
+            .shadow-sm, .shadow-xl { box-shadow: none !important; }
+            .border { border: 1px solid #ccc !important; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen w-screen overflow-hidden" x-data="examApp()">
+
+    <div x-show="view === 'upload'" class="h-full flex flex-col items-center justify-center p-6 text-center">
+        <div class="bg-white p-10 rounded-2xl shadow-xl max-w-md w-full border border-gray-100">
+            <h1 class="text-3xl font-bold text-blue-600 mb-2">TCF Practice</h1>
+            <p class="text-gray-500 mb-8">Upload your generated JSON file to begin.</p>
+            <label class="block w-full cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition shadow-lg shadow-blue-200">
+                <span>Select Exam File</span>
+                <input type="file" accept=".json" class="hidden" @change="loadExam($event)">
+            </label>
+        </div>
+    </div>
+
+    <div x-show="view === 'exam'" class="h-full flex flex-col" style="display: none;">
+        <div class="h-16 bg-white border-b flex items-center justify-between px-4 shadow-sm z-10 shrink-0">
+            <div class="font-bold text-lg font-mono tracking-wider" 
+                 :class="timeElapsed > (timeLimitMinutes * 60) ? 'text-red-600 animate-pulse' : 'text-gray-700'">
+                <span x-text="formatTime(timeElapsed)"></span>
+                <span class="text-xs text-gray-400 font-normal" x-text="'/ ' + timeLimitMinutes + 'm'"></span>
+            </div>
+            <button @click="terminateExam()" class="text-sm font-semibold text-red-500 hover:bg-red-50 px-3 py-1 rounded transition">
+                Terminate
+            </button>
+        </div>
+
+        <div class="flex-1 flex overflow-hidden">
+            <div class="w-20 md:w-64 bg-gray-100 border-r flex flex-col shrink-0">
+                <div class="p-4 font-bold text-gray-400 text-xs uppercase tracking-wider hidden md:block">Questions</div>
+                <div class="flex-1 overflow-y-auto p-2 space-y-2 no-scrollbar">
+                    <template x-for="(q, index) in questions" :key="index">
+                        <button 
+                            @click="currentIndex = index"
+                            class="w-full text-left p-2 rounded-lg text-sm font-medium flex items-center justify-between transition"
+                            :class="{
+                                'bg-blue-600 text-white shadow-md': currentIndex === index,
+                                'bg-white text-gray-700 hover:bg-gray-200': currentIndex !== index,
+                                'ring-2 ring-yellow-400': flags[index]
+                            }">
+                            <span x-text="index + 1"></span>
+                            <span x-show="answers[index] !== undefined && currentIndex !== index" class="w-2 h-2 rounded-full bg-green-400"></span>
+                        </button>
+                    </template>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-6 md:p-10 relative">
+                <template x-if="questions.length > 0">
+                    <div class="max-w-3xl mx-auto">
+                        <div class="flex justify-end mb-4">
+                            <button @click="toggleFlag()" class="flex items-center space-x-2 text-sm font-medium transition"
+                                :class="flags[currentIndex] ? 'text-yellow-500' : 'text-gray-400 hover:text-gray-600'">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21v-8a2 2 0 012-2h10a2 2 0 012 2v8m0-8l-3-3m3 3l-3 3" />
+                                </svg>
+                                <span>Mark for Review</span>
+                            </button>
+                        </div>
+                        <div class="text-xl md:text-2xl font-medium text-gray-800 mb-8 leading-relaxed" x-text="questions[currentIndex].text"></div>
+                        <div class="space-y-3">
+                            <template x-for="(opt, idx) in questions[currentIndex].options" :key="idx">
+                                <button 
+                                    @click="answers[currentIndex] = idx"
+                                    class="w-full text-left p-4 rounded-xl border-2 transition text-lg relative"
+                                    :class="answers[currentIndex] === idx ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-gray-200 hover:border-gray-300 bg-white'">
+                                    <span class="font-bold mr-2" x-text="['A','B','C','D'][idx] + '.'"></span>
+                                    <span x-text="opt"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <div class="h-16 bg-white border-t flex items-center justify-between px-6 shrink-0">
+            <button @click="prev()" :disabled="currentIndex === 0" class="disabled:opacity-30 font-semibold text-gray-600">Previous</button>
+            <span class="text-gray-400 text-sm" x-text="(currentIndex + 1) + ' / ' + questions.length"></span>
+            <button @click="next()" :disabled="currentIndex === questions.length - 1" class="disabled:opacity-30 font-semibold text-blue-600">Next</button>
+        </div>
+    </div>
+
+    <div x-show="view === 'results'" class="h-full overflow-y-auto bg-gray-50 p-6" style="display: none;">
+        <div class="max-w-2xl mx-auto">
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-6 text-center">
+                <div class="text-sm text-gray-400 uppercase tracking-widest font-bold mb-2">Assessment Result</div>
+                <div class="text-6xl font-black text-blue-600 mb-4" x-text="resultLevel"></div>
+                <div class="text-xl text-gray-600">Score: <span class="font-bold" x-text="score"></span> / <span x-text="questions.length"></span></div>
+                <div class="text-sm text-gray-400 mt-2">Time Taken: <span x-text="formatTime(timeElapsed)"></span></div>
+            </div>
+
+            <h3 class="font-bold text-gray-700 mb-4 text-lg">Detailed Review</h3>
+            <div class="space-y-4">
+                <template x-for="(q, index) in questions" :key="index">
+                    <div class="bg-white rounded-xl border p-5 shadow-sm break-inside-avoid" 
+                         :class="answers[index] === q.correctIndex ? 'border-green-200' : 'border-red-200'">
+                        <div class="flex items-start justify-between mb-2">
+                            <span class="font-bold text-gray-400 text-xs">Question <span x-text="index+1"></span></span>
+                            <span class="text-xs font-bold px-2 py-1 rounded border"
+                                  :class="answers[index] === q.correctIndex ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'"
+                                  x-text="answers[index] === q.correctIndex ? 'CORRECT' : 'WRONG'"></span>
+                        </div>
+                        <div class="font-medium text-gray-800 mb-3" x-text="q.text"></div>
+                        
+                        <div x-show="answers[index] !== q.correctIndex" class="text-red-600 text-sm mb-1">
+                            <span class="font-bold">You answered:</span> <span x-text="q.options[answers[index]] || 'No Answer'"></span>
+                        </div>
+                        <div class="text-green-700 text-sm font-bold mb-2">
+                            Correct: <span x-text="q.options[q.correctIndex]"></span>
+                        </div>
+                        <div class="bg-blue-50 text-blue-800 text-sm p-3 rounded-lg mt-3">
+                            <span class="font-bold">Explanation:</span> <span x-text="q.explanation"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <div class="mt-8 grid grid-cols-2 gap-4 no-print">
+                <button @click="window.print()" class="bg-white border-2 border-gray-300 text-gray-700 font-bold py-4 rounded-xl hover:bg-gray-50 transition">
+                    Save Results (PDF)
+                </button>
+                <button @click="location.reload()" class="bg-gray-800 text-white font-bold py-4 rounded-xl hover:bg-gray-900 transition">
+                    Start New Exam
+                </button>
+            </div>
+            <div class="h-20"></div> </div>
+    </div>
+
+    <script>
+        function examApp() {
+            return {
+                view: 'upload',
+                questions: [],
+                currentIndex: 0,
+                answers: {},
+                flags: {},
+                
+                // NEW TIMER LOGIC
+                timeLimitMinutes: 60, // Default limit
+                timeElapsed: 0,       // Starts at 0
+                timerInterval: null,
+                
+                score: 0,
+                resultLevel: '',
+
+                loadExam(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            this.questions = data.questions;
+                            this.timeLimitMinutes = data.timeLimitMinutes || 60; // Use JSON limit or default 60
+                            this.timeElapsed = 0;
+                            this.startTimer();
+                            this.view = 'exam';
+                        } catch (err) {
+                            alert("Invalid JSON file");
+                        }
+                    };
+                    reader.readAsText(file);
+                },
+
+                startTimer() {
+                    this.timerInterval = setInterval(() => {
+                        this.timeElapsed++; 
+                        // It never stops automatically, just counts up.
+                    }, 1000);
+                },
+
+                formatTime(seconds) {
+                    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+                    const s = (seconds % 60).toString().padStart(2, '0');
+                    return `${m}:${s}`;
+                },
+
+                prev() { if (this.currentIndex > 0) this.currentIndex--; },
+                next() { if (this.currentIndex < this.questions.length - 1) this.currentIndex++; },
+                toggleFlag() { this.flags[this.currentIndex] = !this.flags[this.currentIndex]; },
+
+                terminateExam() {
+                    clearInterval(this.timerInterval);
+                    this.calculateResults();
+                    this.view = 'results';
+                },
+
+                calculateResults() {
+                    let correctCount = 0;
+                    this.questions.forEach((q, index) => {
+                        if (this.answers[index] === q.correctIndex) correctCount++;
+                    });
+                    this.score = correctCount;
+                    
+                    const percent = (correctCount / this.questions.length) * 100;
+                    if (percent < 20) this.resultLevel = 'A1';
+                    else if (percent < 40) this.resultLevel = 'A2';
+                    else if (percent < 60) this.resultLevel = 'B1';
+                    else if (percent < 80) this.resultLevel = 'B2';
+                    else if (percent < 95) this.resultLevel = 'C1';
+                    else this.resultLevel = 'C2';
+                }
+            }
+        }
+    </script>
+</body>
+</html>
