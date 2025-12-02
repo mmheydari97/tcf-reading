@@ -14,7 +14,6 @@
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         
-        /* PDF / PRINT STYLING */
         @media print {
             .no-print { display: none !important; }
             body, .h-full, .overflow-y-auto { 
@@ -24,6 +23,8 @@
             }
             .shadow-sm, .shadow-xl { box-shadow: none !important; }
             .border { border: 1px solid #ccc !important; }
+            /* Force background colors to print for the reading text box */
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         }
     </style>
 </head>
@@ -84,7 +85,15 @@
                                 <span>Mark for Review</span>
                             </button>
                         </div>
+                        
+                        <div x-show="questions[currentIndex].readingText" 
+                             class="mb-8 bg-gray-100 border-l-4 border-blue-400 p-6 rounded-r-lg text-gray-700 leading-relaxed italic whitespace-pre-line shadow-sm">
+                            <span class="block text-xs font-bold text-blue-400 uppercase mb-2 not-italic">Document</span>
+                            <span x-text="questions[currentIndex].readingText"></span>
+                        </div>
+
                         <div class="text-xl md:text-2xl font-medium text-gray-800 mb-8 leading-relaxed" x-text="questions[currentIndex].text"></div>
+
                         <div class="space-y-3">
                             <template x-for="(opt, idx) in questions[currentIndex].options" :key="idx">
                                 <button 
@@ -122,12 +131,18 @@
                 <template x-for="(q, index) in questions" :key="index">
                     <div class="bg-white rounded-xl border p-5 shadow-sm break-inside-avoid" 
                          :class="answers[index] === q.correctIndex ? 'border-green-200' : 'border-red-200'">
+                        
                         <div class="flex items-start justify-between mb-2">
                             <span class="font-bold text-gray-400 text-xs">Question <span x-text="index+1"></span></span>
                             <span class="text-xs font-bold px-2 py-1 rounded border"
                                   :class="answers[index] === q.correctIndex ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'"
                                   x-text="answers[index] === q.correctIndex ? 'CORRECT' : 'WRONG'"></span>
                         </div>
+
+                        <div x-show="q.readingText" class="mb-3 p-3 bg-gray-50 border-l-2 border-gray-300 text-sm text-gray-600 italic">
+                             <span x-text="q.readingText"></span>
+                        </div>
+
                         <div class="font-medium text-gray-800 mb-3" x-text="q.text"></div>
                         
                         <div x-show="answers[index] !== q.correctIndex" class="text-red-600 text-sm mb-1">
@@ -151,7 +166,8 @@
                     Start New Exam
                 </button>
             </div>
-            <div class="h-20"></div> </div>
+            <div class="h-20"></div>
+        </div>
     </div>
 
     <script>
@@ -162,12 +178,9 @@
                 currentIndex: 0,
                 answers: {},
                 flags: {},
-                
-                // NEW TIMER LOGIC
-                timeLimitMinutes: 60, // Default limit
-                timeElapsed: 0,       // Starts at 0
+                timeLimitMinutes: 60,
+                timeElapsed: 0,
                 timerInterval: null,
-                
                 score: 0,
                 resultLevel: '',
 
@@ -180,7 +193,8 @@
                         try {
                             const data = JSON.parse(e.target.result);
                             this.questions = data.questions;
-                            this.timeLimitMinutes = data.timeLimitMinutes || 60; // Use JSON limit or default 60
+                            // Ensure default is 60 if missing from JSON
+                            this.timeLimitMinutes = data.timeLimitMinutes || 60;
                             this.timeElapsed = 0;
                             this.startTimer();
                             this.view = 'exam';
@@ -193,8 +207,7 @@
 
                 startTimer() {
                     this.timerInterval = setInterval(() => {
-                        this.timeElapsed++; 
-                        // It never stops automatically, just counts up.
+                        this.timeElapsed++;
                     }, 1000);
                 },
 
@@ -222,11 +235,11 @@
                     this.score = correctCount;
                     
                     const percent = (correctCount / this.questions.length) * 100;
-                    if (percent < 20) this.resultLevel = 'A1';
-                    else if (percent < 40) this.resultLevel = 'A2';
-                    else if (percent < 60) this.resultLevel = 'B1';
-                    else if (percent < 80) this.resultLevel = 'B2';
-                    else if (percent < 95) this.resultLevel = 'C1';
+                    if (percent < 18) this.resultLevel = 'A1';
+                    else if (percent < 38) this.resultLevel = 'A2';
+                    else if (percent < 59) this.resultLevel = 'B1';
+                    else if (percent < 77) this.resultLevel = 'B2';
+                    else if (percent < 90) this.resultLevel = 'C1';
                     else this.resultLevel = 'C2';
                 }
             }
