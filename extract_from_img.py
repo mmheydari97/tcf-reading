@@ -242,11 +242,13 @@ if st.session_state.processed_questions:
     st.divider()
     st.subheader("🎉 Final Result")
     
+    questions_as_dicts = [q.model_dump() for q in st.session_state.processed_questions]
+
     # Construct the Final JSON using the Container Model
     final_exam = ExamOutput(
         examTitle=exam_title,
         timeLimitMinutes=time_limit,
-        questions=st.session_state.processed_questions
+        questions=questions_as_dicts
     )
     
     # Convert Pydantic model to JSON string
