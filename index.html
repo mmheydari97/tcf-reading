@@ -123,7 +123,8 @@
                 <div class="text-sm text-gray-400 uppercase tracking-widest font-bold mb-2">Assessment Result</div>
                 <div class="text-6xl font-black text-blue-600 mb-2" x-text="resultLevel"></div>
                 <div class="text-lg text-gray-500 mb-4">NCLC Level: <span class="font-bold" x-text="nclcLevel"></span></div>
-                <div class="text-xl text-gray-600">Score: <span class="font-bold" x-text="score"></span> / <span x-text="maxScore"></span> pts</div>
+                <div class="text-2xl text-gray-700 font-bold"><span x-text="score"></span> / <span x-text="maxScore"></span> pts</div>
+                <div class="text-sm text-gray-400 mt-1">(Raw: <span x-text="rawScore"></span> / <span x-text="rawMaxScore"></span> pts)</div>
                 <div class="text-sm text-gray-400 mt-2">Time Taken: <span x-text="formatTime(timeElapsed)"></span></div>
                 <div class="text-xs text-gray-400 mt-1">Questions Answered: <span x-text="questions.length"></span></div>
             </div>
@@ -194,6 +195,8 @@
                 timerInterval: null,
                 score: 0,
                 maxScore: 0,
+                rawScore: 0,
+                rawMaxScore: 0,
                 resultLevel: '',
                 nclcLevel: '',
 
@@ -268,6 +271,7 @@
                 calculateResults() {
                     let earnedPoints = 0;
                     let possiblePoints = 0;
+                    const MAX_POSSIBLE = 699; // Full exam max score
                     
                     this.questions.forEach((q, index) => {
                         const pts = this.getPointsForQuestion(q.id);
@@ -277,21 +281,28 @@
                         }
                     });
                     
-                    this.score = earnedPoints;
-                    this.maxScore = possiblePoints;
+                    // Scale the score to represent what it would be on a full 699-point exam
+                    let scaledScore = possiblePoints > 0 
+                        ? Math.round((earnedPoints / possiblePoints) * MAX_POSSIBLE) 
+                        : 0;
                     
-                    // TCF Canada NCLC levels based on points (Compréhension de l'écrit)
+                    this.score = scaledScore;
+                    this.maxScore = MAX_POSSIBLE;
+                    this.rawScore = earnedPoints;
+                    this.rawMaxScore = possiblePoints;
+                    
+                    // TCF Canada NCLC levels based on scaled points
                     // Then map NCLC to CEFR
                     let nclc = '';
                     let cefr = '';
                     
-                    if (earnedPoints >= 549) { nclc = '10+'; cefr = 'C1-C2'; }
-                    else if (earnedPoints >= 524) { nclc = '9'; cefr = 'C1-C2'; }
-                    else if (earnedPoints >= 499) { nclc = '8'; cefr = 'B2'; }
-                    else if (earnedPoints >= 453) { nclc = '7'; cefr = 'B2'; }
-                    else if (earnedPoints >= 406) { nclc = '6'; cefr = 'B1'; }
-                    else if (earnedPoints >= 375) { nclc = '5'; cefr = 'B1'; }
-                    else if (earnedPoints >= 342) { nclc = '4'; cefr = 'B1'; }
+                    if (scaledScore >= 549) { nclc = '10+'; cefr = 'C1-C2'; }
+                    else if (scaledScore >= 524) { nclc = '9'; cefr = 'C1-C2'; }
+                    else if (scaledScore >= 499) { nclc = '8'; cefr = 'B2'; }
+                    else if (scaledScore >= 453) { nclc = '7'; cefr = 'B2'; }
+                    else if (scaledScore >= 406) { nclc = '6'; cefr = 'B1'; }
+                    else if (scaledScore >= 375) { nclc = '5'; cefr = 'B1'; }
+                    else if (scaledScore >= 342) { nclc = '4'; cefr = 'B1'; }
                     else { nclc = '1-3'; cefr = 'A1-A2'; }
                     
                     this.resultLevel = cefr;
