@@ -8,6 +8,13 @@ import PIL.Image
 import json
 from streamlit_paste_button import paste_image_button as pbutton
 import io
+import os
+from dotenv import load_dotenv
+
+# ==========================================
+# 0. SETUP & CONFIG
+# ==========================================
+load_dotenv() # Load environment variables from .env file
 
 # ==========================================
 # 1. PYDANTIC SCHEMA (The Guardrails)
@@ -45,6 +52,8 @@ class GraphState(TypedDict):
 def extract_node(state: GraphState):
     try:
         genai.configure(api_key=state["api_key"])
+        
+        # Using gemini-1.5-flash for speed and availability
         model = genai.GenerativeModel(
             model_name="gemini-2.5-pro",
             generation_config={"response_mime_type": "application/json", "temperature": 0.0}
@@ -111,9 +120,32 @@ This tool uses **LangGraph** to orchestrate an AI workflow and **Pydantic** to g
 # --- Sidebar: Settings ---
 with st.sidebar:
     st.header("Configuration")
-    api_key = st.text_input("Google API Key", type="password")
+    
+    # 1. Try to get key from .env
+    env_api_key = os.getenv("GOOGLE_API_KEY")
+    
+    # 2. Show Input Field
+    user_api_key = st.text_input(
+        "Google API Key", 
+        type="password", 
+        placeholder="Leave empty to use .env file"
+    )
+    
+    # 3. Determine final key
+    api_key = user_api_key if user_api_key else env_api_key
+    
+    # 4. Show Status
+    if api_key:
+        if api_key == env_api_key and not user_api_key:
+            st.success("✅ Key loaded from .env")
+        else:
+            st.success("✅ Key provided manually")
+    else:
+        st.warning("⚠️ No API Key found")
+    
     st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
     
+    st.divider()
     exam_title = st.text_input("Exam Title", "TCF Entraînement 1")
     time_limit = st.number_input("Time Limit (Minutes)", value=60)
 
@@ -140,7 +172,6 @@ with col1:
 
 with col2:
     st.info("Option B: Paste from Clipboard")
-    # This button grabs the image from your clipboard
     paste_result = pbutton(
         label="📋 Paste Image",
         text_color="#ffffff",
@@ -150,9 +181,7 @@ with col2:
     
     if paste_result.image_data is not None:
         st.success("Image pasted successfully!")
-        # The component returns a PIL image directly
         images_to_process.append(paste_result.image_data)
-        # Show a preview of what was pasted
         st.image(paste_result.image_data, caption="Pasted Image", width=200)
 
 if "processed_questions" not in st.session_state:
@@ -161,7 +190,7 @@ if "processed_questions" not in st.session_state:
 # --- Processing Logic ---
 if st.button("Start Processing", type="primary"):
     if not api_key:
-        st.error("Please provide an API Key in the sidebar.")
+        st.error("Please provide an API Key in the sidebar or a .env file.")
     elif not images_to_process:
         st.warning("No images found! Please upload files or paste an image.")
     else:
@@ -188,14 +217,14 @@ if st.button("Start Processing", type="primary"):
             
             # Run the graph
             result_state = app_graph.invoke(inputs)
-
+            
             # Handle Result
             if result_state.get("error"):
-                # CHANGE THIS LINE
                 st.error(f"Error on Image {index + 1}: {result_state['error']}")
             elif result_state.get("structured_data"):
                 # Success! Add to list
                 q_data = result_state["structured_data"]
+                st.session_state.processed_questions.append(q_data)
                 
                 # Show mini preview
                 with st.expander(f"✅ Question {q_data.id} Processed", expanded=False):
