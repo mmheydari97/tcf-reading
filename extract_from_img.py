@@ -108,6 +108,8 @@ if "gallery" not in st.session_state:
     st.session_state.gallery = [] # Stores dicts: {'id': uuid, 'img': PIL_Image, 'hash': str}
 if "processed_questions" not in st.session_state:
     st.session_state.processed_questions = []
+if "processed_paste_hashes" not in st.session_state:
+    st.session_state.processed_paste_hashes = set()  # Track paste operations we've already handled
 
 # --- SIDEBAR CONFIG ---
 with st.sidebar:
@@ -159,9 +161,12 @@ with input_container:
         if paste_result.image_data is not None:
             img = paste_result.image_data
             img_hash = get_image_hash(img)
-            # Check duplication (prevents re-adding on page refresh)
-            if not any(d['hash'] == img_hash for d in st.session_state.gallery):
-                st.session_state.gallery.append({'id': str(uuid.uuid4()), 'img': img, 'hash': img_hash})
+            # Only process if this paste hasn't been handled yet
+            # This prevents re-adding when remove button triggers a rerun
+            if img_hash not in st.session_state.processed_paste_hashes:
+                st.session_state.processed_paste_hashes.add(img_hash)
+                if not any(d['hash'] == img_hash for d in st.session_state.gallery):
+                    st.session_state.gallery.append({'id': str(uuid.uuid4()), 'img': img, 'hash': img_hash})
 
 # ==========================================
 # GALLERY DISPLAY (With Remove Buttons)
@@ -179,6 +184,8 @@ if st.session_state.gallery:
             st.image(item['img'], use_container_width=True)
             # Display Remove Button
             if st.button("❌ Remove", key=f"del_{item['id']}"):
+                # Note: We keep the hash in processed_paste_hashes to prevent
+                # the paste_result from re-adding this image on rerun
                 st.session_state.gallery.pop(idx)
                 st.rerun() # Force refresh to update UI immediately
 
