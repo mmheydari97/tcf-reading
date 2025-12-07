@@ -12,11 +12,13 @@ import os
 from dotenv import load_dotenv
 import uuid
 import hashlib
+import base64
+from openai import OpenAI
 
 # ==========================================
 # 0. SETUP & CONFIG
 # ==========================================
-load_dotenv() # Load environment variables from .env file
+load_dotenv()  # Load environment variables from .env file
 
 # --- Helper to prevent duplicates ---
 def get_image_hash(image):
@@ -24,6 +26,13 @@ def get_image_hash(image):
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format=image.format if image.format else 'PNG')
     return hashlib.md5(img_byte_arr.getvalue()).hexdigest()
+
+# --- Helper to convert PIL Image to base64 ---
+def image_to_base64(image):
+    """Converts PIL Image to base64 string for OpenRouter API"""
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # ==========================================
 # 1. PYDANTIC SCHEMA
@@ -34,7 +43,7 @@ class ExamQuestion(BaseModel):
     text: str = Field(..., description="The actual question text")
     options: List[str] = Field(..., min_items=4, max_items=4, description="Exactly 4 options")
     correctIndex: int = Field(..., ge=0, le=3, description="Index of the correct answer (0-3)")
-    explanation: str = Field(..., description="Explanation in French describing the logic")
+    explanation: str = Field(..., description="Explanation in English describing the logic")
 
 class ExamOutput(BaseModel):
     examTitle: str
@@ -48,29 +57,86 @@ class GraphState(TypedDict):
     image: Any
     question_id: int
     api_key: str
+    provider: str  # "google" or "openrouter"
+    model: str
     raw_response: str
     structured_data: Optional[ExamQuestion]
     error: Optional[str]
 
 def extract_node(state: GraphState):
+    prompt_text = f"""
+    You are an expert French Tutor. Analyze this TCF exam image (ID: {state['question_id']}).
+    IGNORE human marks. SOLVE the question yourself.
+    Extract and return ONLY valid JSON with these fields:
+    - id: {state['question_id']}
+    - readingText: the reading passage text or null if standalone
+    - text: the actual question text
+    - options: array of exactly 4 options
+    - correctIndex: index of correct answer (0-3)
+    - explanation: explanation in French describing the logic
+    
+    Return ONLY the JSON object, no markdown formatting.
+    """
+    
     try:
-        genai.configure(api_key=state["api_key"])
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash", 
-            generation_config={"response_mime_type": "application/json", "temperature": 0.0}
-        )
-        prompt = f"""
-        You are an expert French Tutor. Analyze this TCF exam image (ID: {state['question_id']}).
-        IGNORE human marks. SOLVE the question yourself.
-        Extract: id, readingText (or null), text, options (4), correctIndex (0-3), explanation.
-        """
-        response = model.generate_content([prompt, state["image"]])
-        return {"raw_response": response.text}
+        if state["provider"] == "google":
+            # --- Google Gemini API ---
+            genai.configure(api_key=state["api_key"])
+            model = genai.GenerativeModel(
+                model_name=state["model"],
+                generation_config={"response_mime_type": "application/json", "temperature": 0.0}
+            )
+            response = model.generate_content([prompt_text, state["image"]])
+            return {"raw_response": response.text}
+        
+        elif state["provider"] == "openrouter":
+            # --- OpenRouter API (OpenAI-compatible) ---
+            client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=state["api_key"],
+            )
+            
+            # Convert image to base64
+            img_base64 = image_to_base64(state["image"])
+            
+            response = client.chat.completions.create(
+                model=state["model"],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt_text},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{img_base64}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                temperature=0.0,
+            )
+            
+            raw_text = response.choices[0].message.content
+            # Clean up potential markdown formatting
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            return {"raw_response": raw_text.strip()}
+        
+        else:
+            return {"error": f"Unknown provider: {state['provider']}"}
+            
     except Exception as e:
         return {"error": str(e)}
 
 def validate_node(state: GraphState):
-    if state.get("error"): return state
+    if state.get("error"):
+        return state
     try:
         data_dict = json.loads(state["raw_response"])
         data_dict['id'] = state['question_id']
@@ -105,7 +171,7 @@ st.title("📄 TCF Exam Screenshot Processor")
 
 # --- SESSION STATE INITIALIZATION ---
 if "gallery" not in st.session_state:
-    st.session_state.gallery = [] # Stores dicts: {'id': uuid, 'img': PIL_Image, 'hash': str}
+    st.session_state.gallery = []  # Stores dicts: {'id': uuid, 'img': PIL_Image, 'hash': str}
 if "processed_questions" not in st.session_state:
     st.session_state.processed_questions = []
 if "processed_paste_hashes" not in st.session_state:
@@ -114,16 +180,60 @@ if "processed_paste_hashes" not in st.session_state:
 # --- SIDEBAR CONFIG ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    env_key = os.getenv("GOOGLE_API_KEY")
-    user_key = st.text_input("Google API Key", type="password", placeholder="Leave empty to use .env")
+    
+    # --- Provider Selection ---
+    st.subheader("🔌 Service Provider")
+    provider = st.radio(
+        "Choose Provider",
+        options=["google", "openrouter"],
+        format_func=lambda x: "Google Gemini" if x == "google" else "OpenRouter",
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    
+    # --- Model Selection (default changes based on provider) ---
+    default_models = {
+        "google": "gemini-2.5-flash",
+        "openrouter": "google/gemini-2.0-flash-exp:free"
+    }
+    model_name = st.text_input(
+        "Model Name",
+        value=default_models[provider],
+        help="Enter the model identifier for the selected provider"
+    )
+    
+    st.divider()
+    
+    # --- API Key Section ---
+    st.subheader("🔑 API Key")
+    
+    # Get environment keys
+    env_google_key = os.getenv("GOOGLE_API_KEY")
+    env_openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    
+    # Determine which env key to use based on provider
+    env_key = env_google_key if provider == "google" else env_openrouter_key
+    env_var_name = "GOOGLE_API_KEY" if provider == "google" else "OPENROUTER_API_KEY"
+    
+    user_key = st.text_input(
+        f"API Key ({provider.title()})",
+        type="password",
+        placeholder=f"Leave empty to use {env_var_name} from .env",
+        label_visibility="collapsed"
+    )
+    
+    # Use user key if provided, otherwise fall back to env key
     api_key = user_key if user_key else env_key
     
     if api_key:
-        st.success("✅ API Key Loaded")
+        st.success(f"✅ API Key Loaded for {provider.title()}")
     else:
-        st.error("❌ No API Key Found")
-        
+        st.error(f"❌ No API Key Found (set {env_var_name} in .env or enter above)")
+    
     st.divider()
+    
+    # --- Exam Settings ---
+    st.subheader("📝 Exam Settings")
     exam_title = st.text_input("Exam Title", "TCF Entraînement 1")
     time_limit = st.number_input("Time Limit (Minutes)", value=60)
 
@@ -138,7 +248,12 @@ with input_container:
     
     # --- A. Upload Logic ---
     with col_up:
-        uploaded_files = st.file_uploader("📂 Upload Files", accept_multiple_files=True, type=['png', 'jpg', 'webp'], label_visibility="collapsed")
+        uploaded_files = st.file_uploader(
+            "📂 Upload Files",
+            accept_multiple_files=True,
+            type=['png', 'jpg', 'webp'],
+            label_visibility="collapsed"
+        )
         if uploaded_files:
             for f in uploaded_files:
                 img = PIL.Image.open(f)
@@ -149,8 +264,7 @@ with input_container:
 
     # --- B. Paste Logic ---
     with col_paste:
-        # We wrap paste button in a centered layout
-        st.write("") # Spacer to align with uploader
+        st.write("")  # Spacer to align with uploader
         paste_result = pbutton(
             label="📋 Paste from Clipboard",
             text_color="#ffffff",
@@ -162,7 +276,6 @@ with input_container:
             img = paste_result.image_data
             img_hash = get_image_hash(img)
             # Only process if this paste hasn't been handled yet
-            # This prevents re-adding when remove button triggers a rerun
             if img_hash not in st.session_state.processed_paste_hashes:
                 st.session_state.processed_paste_hashes.add(img_hash)
                 if not any(d['hash'] == img_hash for d in st.session_state.gallery):
@@ -180,19 +293,22 @@ if st.session_state.gallery:
     for idx, item in enumerate(st.session_state.gallery):
         col = cols[idx % 5]
         with col:
-            # Display Image
             st.image(item['img'], use_container_width=True)
-            # Display Remove Button
             if st.button("❌ Remove", key=f"del_{item['id']}"):
-                # Note: We keep the hash in processed_paste_hashes to prevent
-                # the paste_result from re-adding this image on rerun
                 st.session_state.gallery.pop(idx)
-                st.rerun() # Force refresh to update UI immediately
+                st.rerun()
 
 # ==========================================
 # PROCESSING LOGIC
 # ==========================================
 st.divider()
+
+# Show current configuration
+with st.expander("📊 Current Configuration", expanded=False):
+    st.write(f"**Provider:** {provider.title()}")
+    st.write(f"**Model:** {model_name}")
+    st.write(f"**API Key:** {'✅ Set' if api_key else '❌ Not Set'}")
+
 if st.button("🚀 Start Processing", type="primary", use_container_width=True):
     if not api_key:
         st.error("Please provide an API Key.")
@@ -206,13 +322,15 @@ if st.button("🚀 Start Processing", type="primary", use_container_width=True):
         total = len(st.session_state.gallery)
         
         for i, item in enumerate(st.session_state.gallery):
-            status_text.text(f"Processing Image {i + 1}/{total}...")
+            status_text.text(f"Processing Image {i + 1}/{total} via {provider.title()}...")
             progress_bar.progress(i / total)
             
             inputs = {
                 "image": item['img'],
                 "question_id": i + 1,
                 "api_key": api_key,
+                "provider": provider,
+                "model": model_name,
                 "raw_response": "",
                 "structured_data": None,
                 "error": None
